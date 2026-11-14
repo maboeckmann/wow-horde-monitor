@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {candidate,newEvidence,parseFeed,staffStatement,stateStore} from './monitor.mjs';
+import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main} from './monitor.mjs';
 const now=Date.now();
 const make=(overrides={})=>({id:'a',author:'one',title:'EU PvP Horde',body:'I just created my first Horde character on EU PvP.',url:'https://www.reddit.com/r/wowforever/comments/a/',date:now,...overrides});
 test('explicit recent first-character EU PvP success is a candidate',()=>assert.equal(candidate(make(),now),true));
@@ -65,4 +65,18 @@ test('cloud state reports an unexpected GitHub failure clearly',async t=>{
   process.env.GITHUB_ACTIONS='true'; process.env.GITHUB_REPOSITORY='owner/repo';
   t.mock.method(globalThis,'fetch',async()=>Response.json({message:'Forbidden'},{status:403}));
   await assert.rejects(stateStore(),/GitHub state HTTP 403/);
+});
+
+test('a recent cloud check skips all feed requests instead of catching up',async t=>{
+  const savedEnv={...process.env}; t.after(()=>{process.env=savedEnv;});
+  process.env.GITHUB_ACTIONS='true'; process.env.GITHUB_REPOSITORY='owner/repo';
+  const requested=[];
+  t.mock.method(globalThis,'fetch',async url=>{
+    requested.push(url);
+    if(url.endsWith('/git/ref/heads/monitor-state')) return Response.json({});
+    if(url.endsWith('/contents/monitor-state.json?ref=monitor-state')) return Response.json({sha:'saved',content:Buffer.from(JSON.stringify({lastCheck:Date.now()-1000})).toString('base64')});
+    throw Error('Unexpected source query or state write');
+  });
+  await main();
+  assert.equal(requested.length,2);
 });
