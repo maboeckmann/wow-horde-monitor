@@ -1,7 +1,7 @@
 name: EU PvP Horde monitor
 on:
   schedule:
-    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       test_push:
