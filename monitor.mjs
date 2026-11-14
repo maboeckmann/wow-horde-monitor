@@ -84,7 +84,7 @@ export async function push(title, message) {
   if (process.env.NTFY_TOKEN) headers.Authorization = `Bearer ${process.env.NTFY_TOKEN}`;
   await request(`https://ntfy.sh/${topic}`, {method:'POST',headers,body:message});
 }
-async function stateStore() {
+export async function stateStore() {
   if (!process.env.GITHUB_ACTIONS) {
     const file = process.env.MONITOR_STATE || '.monitor-state.json';
     let state = {};
@@ -94,12 +94,13 @@ async function stateStore() {
   const repo = process.env.GITHUB_REPOSITORY;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw Error('Invalid repository');
   const headers = {'Authorization':`Bearer ${process.env.GH_TOKEN}`,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
-  const api = async (path, options={}) => {
-    const r = await fetch(`https://api.github.com/repos/${repo}/${path}`, {headers,signal:AbortSignal.timeout(20000),...options});
-    if (!r.ok && r.status!==404) throw Error(`GitHub state HTTP ${r.status}`);
+  const api = async (path, options={}, allowMissing=false) => {
+    const url = `https://api.github.com/repos/${repo}${path ? `/${path}` : ''}`;
+    const r = await fetch(url, {headers,signal:AbortSignal.timeout(20000),...options});
+    if (!r.ok && !(allowMissing && r.status===404)) throw Error(`GitHub state HTTP ${r.status} (${options.method || 'GET'} ${path || 'repository'})`);
     return r;
   };
-  let branch = await api('git/ref/heads/monitor-state');
+  let branch = await api('git/ref/heads/monitor-state', {}, true);
   if (branch.status===404) {
     const meta = await (await api('')).json();
     const ref = await (await api(`git/ref/heads/${encodeURIComponent(meta.default_branch)}`)).json();
@@ -107,7 +108,7 @@ async function stateStore() {
   }
   let sha;
   let state = {};
-  const r = await api('contents/monitor-state.json?ref=monitor-state');
+  const r = await api('contents/monitor-state.json?ref=monitor-state', {}, true);
   if (r.ok) {const data=await r.json(); sha=data.sha; state=JSON.parse(Buffer.from(data.content,'base64').toString());}
   return {state, save:async()=>{
     const result = await api('contents/monitor-state.json', {method:'PUT',body:JSON.stringify({
