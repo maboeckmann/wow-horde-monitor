@@ -7,7 +7,6 @@ export const FEEDS = [
   'https://eu.forums.blizzard.com/en/wow/u/Kaivax/activity.rss',
   'https://eu.forums.blizzard.com/en/wow/u/Aggrend/activity.rss',
   'https://www.reddit.com/r/wowforever/new/.rss',
-  'https://www.reddit.com/r/wowforever/comments/.rss',
 ];
 const HOUR = 3600000;
 export function decode(s) {
@@ -143,8 +142,10 @@ export async function main() {
     const xml=await r.text(); if(xml.length>2000000) throw Error('Feed exceeded size limit');
     return parseFeed(xml,source);
   }));
+  results.forEach((result,i)=>console.log(JSON.stringify({source:FEEDS[i],ok:result.status==='fulfilled',
+    ...(result.status==='fulfilled' ? {items:result.value.length} : {error:result.reason.message})})));
   const items=results.flatMap(r=>r.status==='fulfilled'?r.value:[]);
-  const errors=results.flatMap((r,i)=>r.status==='rejected'?[`${new URL(FEEDS[i]).hostname}: ${r.reason.message}`]:[]);
+  const errors=results.flatMap((r,i)=>r.status==='rejected'?[`${FEEDS[i]}: ${r.reason.message}`]:[]);
   const errorKey=errors.join('; ');
   if (errors.length) {
     if (state.failure!==errorKey || now-(state.failureAt||0)>=HOUR) {

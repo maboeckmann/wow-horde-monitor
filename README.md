@@ -4,7 +4,9 @@ Independent GitHub Actions RSS checker. No ChatGPT, OpenAI API key, or running P
 
 ## What it can establish
 
-This is a conservative text-matching detector, not ChatGPT research and not a Blizzard status API. It checks EU Forever forum feeds, known staff-account activity feeds, and r/wowforever posts/comments. Two distinct authors must explicitly report FIRST Horde creation on regular EU PvP within the last hour; these alerts say **UNCONFIRMED**. A matching recent reopening statement by Kaivax or Aggrend on the EU forum produces a separate source-linked alert to read and verify. All alerts require manual verification. Ambiguous or differently worded reports may be missed. Source feeds can be incomplete or block GitHub runners. Inspect the first cloud runs before relying on it.
+This is a conservative text-matching detector, not ChatGPT research and not a Blizzard status API. It checks five feeds: EU Forever general discussion, the faction-balance announcement thread, Kaivax and Aggrend activity, and r/wowforever new posts. Two distinct authors must explicitly report FIRST Horde creation on regular EU PvP within the last hour; these alerts say **UNCONFIRMED**. A matching recent reopening statement by Kaivax or Aggrend on the EU forum produces a separate source-linked alert to read and verify. All alerts require manual verification. Ambiguous or differently worded reports may be missed. Source feeds can be incomplete or block GitHub runners.
+
+The subreddit-wide Reddit comments RSS feed returned HTTP 429 during the initial cloud test and is excluded. Reddit comment-only reports are not covered. Each run logs the status and item count of every configured feed, and alerts if any configured feed fails.
 
 ## Deploy
 
@@ -21,4 +23,4 @@ The state branch records a last-check timestamp before any feed requests, so que
 
 Requires Node.js 24 or newer. `node --test monitor.test.mjs` tests the detector without networking or sending pushes. Running `node monitor.mjs` requires `NTFY_TOPIC` in the environment and writes `.monitor-state.json`. `node monitor.mjs --test-push` sends a clearly labelled test.
 
-Your local ChatGPT monitor remains separate and unchanged. This cloud version is not active until deployed, configured, and verified on GitHub.
+Your local ChatGPT monitor remains separate and unchanged. View cloud runs and source status in the repository's Actions tab. The private ntfy topic belongs only in repository secrets, never in committed files.
