@@ -1,1 +1,1 @@
-{"lastCheck":1794768632381,"recent":[],"alerted":{},"health":{"startedAt":1794768331535,"history":[{"id":"43748534123","at":1794768331535,"failed":false},{"id":"43749004670","at":1794768632381,"failed":false}],"alertActive":false}}
+{"lastCheck":1794768924736,"recent":[],"alerted":{},"health":{"startedAt":1794768331535,"history":[{"id":"43748534123","at":1794768331535,"failed":false},{"id":"43749004670","at":1794768632381,"failed":false},{"id":"43749457377","at":1794768924736,"failed":true}],"alertActive":false}}
