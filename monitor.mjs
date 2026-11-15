@@ -134,7 +134,9 @@ export async function main() {
   const store = await stateStore();
   const state = store.state;
   const now = Date.now();
-  if (state.lastCheck && now-state.lastCheck < 300000) {console.log('SKIP: Check interval already reserved.'); return;}
+  // The clock ticks every five minutes, but runner start times can vary.
+  // Allow one minute of jitter while still rejecting queued duplicate bursts.
+  if (state.lastCheck && now-state.lastCheck < 240000) {console.log('SKIP: Check interval already reserved.'); return;}
   state.lastCheck = now;
   await store.save(); // Reserve BEFORE accessing sources. No replay loop.
   const results = await Promise.allSettled(FEEDS.map(async source=>{

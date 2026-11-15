@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main} from './monitor.mjs';
+import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main,FEEDS} from './monitor.mjs';
 const now=Date.now();
 const make=(overrides={})=>({id:'a',author:'one',title:'EU PvP Horde',body:'I just created my first Horde character on EU PvP.',url:'https://www.reddit.com/r/wowforever/comments/a/',date:now,...overrides});
 test('explicit recent first-character EU PvP success is a candidate',()=>assert.equal(candidate(make(),now),true));
@@ -79,4 +79,24 @@ test('a recent cloud check skips all feed requests instead of catching up',async
   });
   await main();
   assert.equal(requested.length,2);
+});
+
+test('a five-minute scheduled check tolerates a 30-second earlier runner start',async t=>{
+  const savedEnv={...process.env}; t.after(()=>{process.env=savedEnv;});
+  process.env.GITHUB_ACTIONS='true'; process.env.GITHUB_REPOSITORY='owner/repo';
+  const feeds=[]; const writes=[];
+  t.mock.method(globalThis,'fetch',async(url,options={})=>{
+    if(url.endsWith('/git/ref/heads/monitor-state')) return Response.json({});
+    if(url.endsWith('/contents/monitor-state.json?ref=monitor-state')) return Response.json({sha:'saved',content:Buffer.from(JSON.stringify({lastCheck:Date.now()-270000})).toString('base64')});
+    if(url.endsWith('/contents/monitor-state.json') && options.method==='PUT') {
+      writes.push(JSON.parse(options.body));
+      return Response.json({content:{sha:`save-${writes.length}`}});
+    }
+    if(FEEDS.includes(url)) {feeds.push(url); return new Response('<rss><channel></channel></rss>');}
+    throw Error('Unexpected request');
+  });
+  await main();
+  assert.deepEqual(feeds,FEEDS);
+  assert.equal(writes.length,2);
+  assert.equal(writes[1].sha,'save-1');
 });

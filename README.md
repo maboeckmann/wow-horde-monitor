@@ -1,6 +1,6 @@
 # EU PvP Horde phone monitor
 
-Independent GitHub Actions RSS checker. No ChatGPT, OpenAI API key, or running PC is required.
+Independent RSS checker executed by GitHub Actions and triggered every five minutes by cron-job.org. No ChatGPT, OpenAI API key, or running PC is required.
 
 ## What it can establish
 
@@ -14,10 +14,10 @@ The subreddit-wide Reddit comments RSS feed returned HTTP 429 during the initial
 2. In repository **Settings > Secrets and variables > Actions**, add repository secret `NTFY_TOPIC` containing the topic subscribed to on your phone. Optionally add `NTFY_TOKEN` for an authenticated ntfy account.
 3. In **Actions**, enable workflows if prompted. Choose **EU PvP Horde monitor > Run workflow**, check `test_push`, and run it on the default branch. Confirm the phone receives **TEST ONLY - GitHub WoW monitor**.
 4. Run again with `test_push` unchecked. Inspect source failures and output. The workflow reserves a `monitor-state` branch automatically; keep it dedicated to this checker.
-5. Scheduled checks run about every five minutes, offset from the hour. GitHub can delay/drop schedules; these are not real-time guarantees. Public standard runners are free; private repositories use the account's included quota. A public scheduled workflow can be disabled after 60 days of inactivity. No paid plan is required, but monitor quota if the repository is private.
-6. Enable GitHub Actions failure notifications as an independent fallback. ntfy cannot report a failure of ntfy itself, exhausted Actions quota, or a scheduler that never starts.
+5. Configure the external five-minute job using [cron-job-setup.md](cron-job-setup.md). This workflow uses only `workflow_dispatch`; GitHub's unreliable scheduled trigger is removed. External scheduling and GitHub runner availability still have no exact-time guarantee. Public standard runners are free; private repositories use the account's included quota.
+6. Enable cron-job.org failure, recovery, and automatic-disable notifications, and attach email and ntfy channels. These report dispatch failures; an accepted dispatch does not prove the checker finished. Enable GitHub Actions failure notifications as another fallback. An independent missed-success heartbeat is not configured by this repository.
 
-The state branch records a last-check timestamp before any feed requests, so queued invocations within five minutes skip searches. There is no missed-interval replay. Evidence IDs prevent repeating the same reopening alert. Source failures produce a phone alert; persistent identical source failures are summarized at most hourly and recovery produces a separate message. A workflow-level failure alert covers failed jobs. A runner or ntfy outage can still prevent delivery.
+The state branch records a last-check timestamp before any feed requests. The external clock ticks every five minutes; a four-minute minimum gap allows one minute of runner-start jitter while rejecting queued duplicate bursts. There is no missed-interval replay. Evidence IDs prevent repeating the same reopening alert. Source failures produce a phone alert; persistent identical source failures are summarized at most hourly and recovery produces a separate message. A workflow-level failure alert covers failed jobs. A runner or ntfy outage can still prevent delivery.
 
 ## Test locally
 
