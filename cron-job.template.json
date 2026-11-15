@@ -18,7 +18,7 @@
     },
     "notification": {
       "onFailure": true,
-      "onFailureCount": 1,
+      "onFailureCount": 12,
       "onSuccess": true,
       "onDisable": true,
       "mode": 2,

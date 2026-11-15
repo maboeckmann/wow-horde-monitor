@@ -36,18 +36,19 @@ jobs:
       - name: Send cloud test
         if: ${{ inputs.test_push }}
         run: node monitor.mjs --test-push
-      - name: Report setup or runtime failure
-        if: ${{ failure() && steps.check.outcome != 'failure' }}
+      - name: Record setup or runtime failure using the shared alert policy
+        if: ${{ failure() && !inputs.test_push }}
         shell: bash
         run: |
-          # Covers failures before monitor.mjs can report (for example checkout).
-          if [ -n "$NTFY_TOPIC" ]; then
-            auth=()
-            if [ -n "$NTFY_TOKEN" ]; then auth=(-H "Authorization: Bearer $NTFY_TOKEN"); fi
+          # Use this exact commit even if checkout failed. Never push directly.
+          script="$RUNNER_TEMP/monitor-failure.mjs"
+          if [ -f monitor.mjs ]; then
+            cp monitor.mjs "$script"
+          else
             curl --fail --silent --show-error --max-time 20 \
-              -H 'Title: MONITOR CHECK FAILED - GitHub workflow' \
-              -H 'Priority: high' \
-              "${auth[@]}" \
-              --data "Cloud workflow failed. Inspect https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID . This is NOT a reopening alert." \
-              "https://ntfy.sh/$NTFY_TOPIC"
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/monitor.mjs?ref=$GITHUB_SHA" \
+              --output "$script"
           fi
+          node "$script" --record-failure

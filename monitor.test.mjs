@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main,FEEDS} from './monitor.mjs';
+import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main,FEEDS,recordHealth,notifyHealth} from './monitor.mjs';
+// No fixture may reach a real feed or notification topic, including in CI.
+globalThis.fetch = async () => {throw Error('Network disabled in tests');};
 const now=Date.now();
 const make=(overrides={})=>({id:'a',author:'one',title:'EU PvP Horde',body:'I just created my first Horde character on EU PvP.',url:'https://www.reddit.com/r/wowforever/comments/a/',date:now,...overrides});
 test('explicit recent first-character EU PvP success is a candidate',()=>assert.equal(candidate(make(),now),true));
@@ -99,4 +101,166 @@ test('a five-minute scheduled check tolerates a 30-second earlier runner start',
   assert.deepEqual(feeds,FEEDS);
   assert.equal(writes.length,2);
   assert.equal(writes[1].sha,'save-1');
+});
+
+const STEP = 300000;
+const SIX_HOURS = 6 * 3600000;
+function healthFixture(state = {}) {
+  const messages = [];
+  const store = {state, save: async () => {}};
+  const send = async (title, body) => messages.push({title, body});
+  const check = async (failed, at, opening = false) => {
+    const stats = recordHealth(state, failed, at);
+    await notifyHealth(store, stats, failed, 'fixture failure', opening, send);
+    return stats;
+  };
+  return {state, messages, check};
+}
+
+test('twelve consecutive failed runs alert once; changes and continued failures stay quiet', async () => {
+  const {check, messages} = healthFixture();
+  for (let i = 0; i < 11; i++) await check(true, now + i * STEP);
+  assert.equal(messages.length, 0);
+  await check(true, now + 11 * STEP);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].body, /12 consecutive/);
+  for (let i = 12; i < 36; i++) await check(true, now + i * STEP);
+  assert.equal(messages.length, 1);
+});
+
+test('an unalerted transient failure recovers silently and resets the consecutive count', async () => {
+  const {check, messages} = healthFixture();
+  for (let i = 0; i < 11; i++) await check(true, now + i * STEP);
+  await check(false, now + 11 * STEP);
+  const stats = await check(true, now + 12 * STEP);
+  assert.equal(stats.consecutive, 1);
+  assert.equal(messages.length, 0);
+});
+
+test('a resolved consecutive-failure incident permits a later failure alert', async () => {
+  const {check, messages} = healthFixture();
+  for (let i = 0; i < 12; i++) await check(true, now + i * STEP);
+  await check(false, now + 12 * STEP);
+  await check(false, now + 13 * STEP);
+  for (let i = 14; i < 26; i++) await check(true, now + i * STEP);
+  assert.deepEqual(messages.map(m => m.title), [
+    'MONITOR CHECK FAILED - WoW', 'WoW monitor back to normal', 'MONITOR CHECK FAILED - WoW',
+  ]);
+});
+
+test('ratio needs a full six-hour observation period and strictly more than 50%', async () => {
+  const {check, messages} = healthFixture();
+  // Alternation prevents the consecutive threshold from masking the ratio test.
+  for (let i = 0; i <= 72; i++) await check(i % 2 === 0, now + i * STEP);
+  assert.equal(messages.length, 0); // Exactly 36/72 failures at six hours.
+  const stats = await check(true, now + 73 * STEP);
+  assert.equal(stats.total, 72);
+  assert.equal(stats.failures, 37);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].body, /37\/72.*six hours/);
+});
+
+test('ratio alert stays active through isolated successes and recovers at 50%', async () => {
+  const {check, messages} = healthFixture();
+  for (let i = 0; i <= 72; i++) await check(i % 3 !== 2, now + i * STEP);
+  assert.equal(messages.length, 1);
+  await check(false, now + 73 * STEP);
+  assert.equal(messages.length, 1);
+  for (let i = 74; i <= 100; i++) await check(false, now + i * STEP);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].title, 'WoW monitor back to normal');
+});
+
+test('expired outcomes leave the six-hour window; run IDs prevent double counting', () => {
+  const state = {};
+  recordHealth(state, true, now, 'same-run');
+  recordHealth(state, true, now + 1000, 'same-run');
+  assert.equal(state.health.history.length, 1);
+  recordHealth(state, false, now + 2000, 'same-run');
+  assert.equal(state.health.history[0].failed, false);
+  const stats = recordHealth(state, false, now + SIX_HOURS, 'later-run');
+  assert.equal(stats.total, 1);
+  assert.equal(stats.failures, 0);
+});
+
+test('opening supersedes a failure or recovery message and ends the incident silently', async () => {
+  const {check, messages, state} = healthFixture();
+  for (let i = 0; i < 11; i++) await check(true, now + i * STEP);
+  await check(true, now + 11 * STEP, true);
+  assert.equal(messages.length, 0);
+  await check(true, now + 12 * STEP);
+  assert.equal(messages.length, 1);
+  await check(true, now + 13 * STEP, true);
+  await check(false, now + 14 * STEP);
+  assert.equal(messages.length, 1);
+  assert.equal(state.health.alertActive, false);
+});
+
+test('legacy state preserves evidence, interval guard, and an already alerted incident', async () => {
+  const state = {lastCheck: now, alerted: {a: now}, failure: 'old source error', failureAt: now};
+  const {check, messages} = healthFixture(state);
+  await check(true, now + STEP);
+  assert.equal(messages.length, 0);
+  await check(false, now + 2 * STEP);
+  assert.equal(messages.length, 1);
+  assert.equal(state.lastCheck, now);
+  assert.deepEqual(state.alerted, {a: now});
+  assert.equal(state.failure, undefined);
+});
+
+test('notification failure cannot cause repeated failure attempts or a false recovery', async () => {
+  const state = {};
+  let stats;
+  for (let i = 0; i < 12; i++) stats = recordHealth(state, true, now + i * STEP);
+  let attempts = 0;
+  const store = {state, save: async () => {}};
+  const brokenSend = async () => {attempts++; throw Error('fixture ntfy timeout');};
+  await assert.rejects(notifyHealth(store, stats, true, 'fixture', false, brokenSend), /timeout/);
+  await notifyHealth(store, stats, true, 'changed error', false, brokenSend);
+  const recovered = recordHealth(state, false, now + 12 * STEP);
+  await notifyHealth(store, recovered, false, '', false, brokenSend);
+  assert.equal(attempts, 1);
+  assert.equal(state.health.alertActive, false);
+});
+
+test('state must be saved before any health notification is attempted', async () => {
+  const state = {};
+  let stats;
+  for (let i = 0; i < 12; i++) stats = recordHealth(state, true, now + i * STEP);
+  let attempts = 0;
+  await assert.rejects(notifyHealth({state, save: async () => {throw Error('fixture storage unavailable');}},
+    stats, true, 'fixture', false, async () => {attempts++;}), /storage unavailable/);
+  assert.equal(attempts, 0);
+});
+
+test('opening evidence alerts before health warnings even with failing feeds', async t => {
+  const savedEnv = {...process.env};
+  const savedExitCode = process.exitCode;
+  const savedArgv = [...process.argv];
+  t.after(() => {process.env = savedEnv; process.exitCode = savedExitCode; process.argv = savedArgv;});
+  process.env.GITHUB_ACTIONS = 'true'; process.env.GITHUB_REPOSITORY = 'owner/repo';
+  process.env.GITHUB_RUN_ID = 'opening-run'; process.env.NTFY_TOPIC = 'fixture-only';
+  const state = {};
+  for (let i = 0; i < 11; i++) recordHealth(state, true, now - (11 - i) * STEP);
+  const pushes = [];
+  let persisted = state;
+  t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+    if (url.endsWith('/git/ref/heads/monitor-state')) return Response.json({});
+    if (url.endsWith('/contents/monitor-state.json?ref=monitor-state'))
+      return Response.json({sha: 'fixture', content: Buffer.from(JSON.stringify(persisted)).toString('base64')});
+    if (url.endsWith('/contents/monitor-state.json') && options.method === 'PUT') {
+      persisted = JSON.parse(Buffer.from(JSON.parse(options.body).content, 'base64').toString());
+      return Response.json({content: {sha: 'updated'}});
+    }
+    if (url === FEEDS[0]) return new Response(`<rss><channel><item><guid>staff</guid><link>https://eu.forums.blizzard.com/en/wow/t/a/1</link><title>EU PvP Horde</title><dc:creator>Kaivax</dc:creator><pubDate>${new Date(now).toUTCString()}</pubDate><description>Horde character creation is now enabled on EU PvP.</description></item></channel></rss>`);
+    if (FEEDS.includes(url)) throw Error('Fixture feed unavailable');
+    if (url === 'https://ntfy.sh/fixture-only') {pushes.push(options.headers.Title); return new Response('ok');}
+    throw Error('Unexpected request');
+  });
+  await main();
+  // The workflow fallback sees the same failed run, with its opening already sent.
+  process.argv.push('--record-failure');
+  await main();
+  assert.deepEqual(pushes, ['EU PvP Horde - Blizzard post']);
+  assert.equal(persisted.health.history.length, 12);
 });

@@ -9,6 +9,64 @@ export const FEEDS = [
   'https://www.reddit.com/r/wowforever/new/.rss',
 ];
 const HOUR = 3600000;
+const HEALTH_WINDOW = 6 * HOUR;
+
+export function recordHealth(state, failed, now, runId = String(now)) {
+  state.health ||= {startedAt: now, history: [], alertActive: Boolean(state.failureAt)};
+  // Upgrade old state without sending a new alert or resetting the check guard.
+  delete state.failure;
+  delete state.failureAt;
+  const health = state.health;
+  const previous = health.history.find(row => row.id === runId);
+  if (previous) previous.failed = failed;
+  else health.history.push({id: runId, at: now, failed});
+  health.history = health.history.filter(row => row.at > now - HEALTH_WINDOW);
+  let consecutive = 0;
+  for (const row of [...health.history].reverse()) {
+    if (!row.failed) break;
+    consecutive++;
+  }
+  const failures = health.history.filter(row => row.failed).length;
+  const ratio = failures / health.history.length;
+  const ratioExceeded = now - health.startedAt >= HEALTH_WINDOW && ratio > 0.5;
+  return {consecutive, failures, total: health.history.length, ratio, ratioExceeded,
+    unhealthy: consecutive >= 12 || ratioExceeded};
+}
+
+export async function notifyHealth(store, stats, failed, details, openingSent = false, send = push) {
+  const health = store.state.health;
+  let notification;
+  if (openingSent) {
+    // Opening evidence replaces a recovery message for an existing incident.
+    if (health.alertActive) health.openingNotified = true;
+  } else if (health.alertActive && !failed && !stats.unhealthy) {
+    if (!health.openingNotified && health.alertDelivered !== false) {
+      notification = ['WoW monitor back to normal',
+        'All configured RSS sources are accessible again and the six-hour failure rate is at most 50%. This is NOT a reopening alert.'];
+    }
+    health.alertActive = false;
+    delete health.alertDelivered;
+    delete health.openingNotified;
+  } else if (!health.alertActive && stats.unhealthy) {
+    const reason = stats.consecutive >= 12
+      ? `${stats.consecutive} consecutive checks failed (about one hour at the five-minute schedule).`
+      : `${stats.failures}/${stats.total} checks failed in the last six hours (${(stats.ratio * 100).toFixed(1)}%).`;
+    notification = ['MONITOR CHECK FAILED - WoW',
+      `${reason} Monitoring coverage is incomplete. ${details} Inspect GitHub Actions. This is NOT a reopening alert.`];
+    health.alertActive = true;
+    health.alertDelivered = false;
+  }
+  // Reserve transitions before delivery: a fallback run must never repeat an
+  // alert just because the push or a later state save had an ambiguous outcome.
+  await store.save();
+  if (notification) {
+    await send(...notification);
+    if (health.alertActive) {
+      health.alertDelivered = true;
+      await store.save();
+    }
+  }
+}
 export function decode(s) {
   return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&(?:lt|gt|quot|apos|amp|#\d+|#x[\da-f]+);/gi, x => {
@@ -134,11 +192,22 @@ export async function main() {
   const store = await stateStore();
   const state = store.state;
   const now = Date.now();
+  const runId = process.env.GITHUB_RUN_ID || String(now);
+  if (process.argv.includes('--record-failure')) {
+    const stats = recordHealth(state, true, now, runId);
+    await notifyHealth(store, stats, true, `Workflow setup or runtime failure. Run ${runId}.`, state.health.lastOpeningRunId === runId);
+    return;
+  }
   // The clock ticks every five minutes, but runner start times can vary.
   // Allow one minute of jitter while still rejecting queued duplicate bursts.
   if (state.lastCheck && now-state.lastCheck < 240000) {console.log('SKIP: Check interval already reserved.'); return;}
   state.lastCheck = now;
+  // An interrupted run remains a failure; a completed run replaces this outcome.
+  recordHealth(state, true, now, runId);
   await store.save(); // Reserve BEFORE accessing sources. No replay loop.
+  let completed = false;
+  let openingSent = false;
+  try {
   const results = await Promise.allSettled(FEEDS.map(async source=>{
     const r=await request(source, {headers:{'User-Agent':'WoW-Reopening-Watcher/1.0 (RSS reader)','Accept':'application/rss+xml, application/atom+xml, text/xml'}});
     const xml=await r.text(); if(xml.length>2000000) throw Error('Feed exceeded size limit');
@@ -148,17 +217,6 @@ export async function main() {
     ...(result.status==='fulfilled' ? {items:result.value.length} : {error:result.reason.message})})));
   const items=results.flatMap(r=>r.status==='fulfilled'?r.value:[]);
   const errors=results.flatMap((r,i)=>r.status==='rejected'?[`${FEEDS[i]}: ${r.reason.message}`]:[]);
-  const errorKey=errors.join('; ');
-  if (errors.length) {
-    if (state.failure!==errorKey || now-(state.failureAt||0)>=HOUR) {
-      await push('MONITOR CHECK FAILED - WoW', `Monitoring coverage is incomplete. ${errorKey}. Inspect GitHub Actions. This is NOT a reopening alert.`);
-      state.failureAt=now;
-    }
-    state.failure=errorKey;
-  } else if (state.failure) {
-    await push('WoW monitor recovered','All configured RSS sources are accessible again. This is NOT a reopening alert.');
-    delete state.failure; delete state.failureAt;
-  }
   state.recent = [...(state.recent||[]), ...items.filter(i=>candidate(i,now))].filter(i=>now-i.date<=HOUR);
   const evidence=newEvidence(state.recent,state,now);
   const staff=items.filter(i=>staffStatement(i,now) && !state.alerted?.[i.id]);
@@ -166,22 +224,41 @@ export async function main() {
     await push('EU PvP Horde - Blizzard post', `A known Blizzard forum account posted a possible EU PvP Horde reopening statement. Automated text matching; read the source to confirm current availability.\n\n${staff.map(i=>`${i.author}: ${i.body.slice(0,350)}\n${i.url}`).join('\n\n')}`);
     state.alerted ||= {};
     for(const i of staff) state.alerted[i.id]=now;
+    openingSent = true;
+    state.health.lastOpeningRunId = runId;
+    if (state.health.alertActive) state.health.openingNotified = true;
+    await store.save();
   }
-  if(evidence.length) {
+  if(evidence.length && !openingSent) {
     const lines=evidence.map(i=>`${i.author}: ${i.body.slice(0,300)}\n${i.url}`);
     await push('POSSIBLE EU PvP Horde opening', `UNCONFIRMED: Two authors report first Horde creation on EU PvP within the last hour. Automated text matching; verify the linked reports. Openings may close quickly.\n\n${lines.join('\n\n')}`);
     state.alerted ||= {};
     for(const i of evidence) state.alerted[i.id]=now;
+    openingSent = true;
+    state.health.lastOpeningRunId = runId;
+    if (state.health.alertActive) state.health.openingNotified = true;
+    await store.save();
   }
+  // One opening notification per run, even when staff and community reports agree.
+  if (openingSent) for (const i of evidence) state.alerted[i.id] = now;
   state.alerted=Object.fromEntries(Object.entries(state.alerted||{}).filter(([,t])=>now-t<86400000));
-  await store.save();
-  console.log(JSON.stringify({checkedAt:new Date(now).toISOString(),items:items.length,sourceFailures:errors.length,evidence:evidence.length}));
+  const stats = recordHealth(state, errors.length > 0, now, runId);
+  completed = true;
+  await notifyHealth(store, stats, errors.length > 0, errors.join('; '), openingSent);
+  console.log(JSON.stringify({checkedAt:new Date(now).toISOString(),items:items.length,sourceFailures:errors.length,evidence:evidence.length,health:stats,alertActive:state.health.alertActive}));
   if (errors.length) process.exitCode=1;
+  } catch (e) {
+    // Do not recursively report notification/state-save failures as new alerts.
+    if (!completed) {
+      const stats = recordHealth(state, true, now, runId);
+      await notifyHealth(store, stats, true, e.message, openingSent);
+    }
+    throw e;
+  }
 }
 if (process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
-  main().catch(async e=>{
+  main().catch(e=>{
     console.error(`MONITOR CHECK FAILED: ${e.message}`);
-    try {await push('MONITOR CHECK FAILED - WoW', `The cloud check could not complete: ${e.message}. Inspect GitHub Actions. This is NOT a reopening alert.`);} catch {console.error('ntfy failure alert also failed; inspect GitHub Actions notifications.');}
     process.exitCode=1;
   });
 }
