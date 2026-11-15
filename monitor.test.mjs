@@ -233,6 +233,17 @@ test('state must be saved before any health notification is attempted', async ()
   assert.equal(attempts, 0);
 });
 
+test('failed recovery delivery keeps repeat failure alerts suppressed', async () => {
+  const {state, check, messages} = healthFixture();
+  for (let i = 0; i < 12; i++) await check(true, now + i * STEP);
+  const stats = recordHealth(state, false, now + 12 * STEP);
+  await assert.rejects(notifyHealth({state, save: async () => {}}, stats, false, '', false,
+    async () => {throw Error('fixture recovery timeout');}), /recovery timeout/);
+  assert.equal(state.health.alertActive, true);
+  for (let i = 13; i < 26; i++) await check(true, now + i * STEP);
+  assert.equal(messages.length, 1);
+});
+
 test('opening evidence alerts before health warnings even with failing feeds', async t => {
   const savedEnv = {...process.env};
   const savedExitCode = process.exitCode;

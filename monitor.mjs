@@ -41,8 +41,10 @@ export async function notifyHealth(store, stats, failed, details, openingSent = 
     if (health.alertActive) health.openingNotified = true;
   } else if (health.alertActive && !failed && !stats.unhealthy) {
     if (!health.openingNotified && health.alertDelivered !== false) {
-      notification = ['WoW monitor back to normal',
-        'All configured RSS sources are accessible again and the six-hour failure rate is at most 50%. This is NOT a reopening alert.'];
+      // A failed recovery delivery must keep the incident active, otherwise
+      // the next run could send another failure before a recovery was accepted.
+      await send('WoW monitor back to normal',
+        'All configured RSS sources are accessible again and the six-hour failure rate is at most 50%. This is NOT a reopening alert.');
     }
     health.alertActive = false;
     delete health.alertDelivered;
@@ -56,7 +58,7 @@ export async function notifyHealth(store, stats, failed, details, openingSent = 
     health.alertActive = true;
     health.alertDelivered = false;
   }
-  // Reserve transitions before delivery: a fallback run must never repeat an
+  // Reserve failure alerts before delivery: a fallback run must never repeat an
   // alert just because the push or a later state save had an ambiguous outcome.
   await store.save();
   if (notification) {
