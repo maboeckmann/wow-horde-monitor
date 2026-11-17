@@ -6,8 +6,16 @@ export const FEEDS = [
   'https://eu.forums.blizzard.com/en/wow/t/pvp-faction-balance-updates-11-november/641169.rss',
   'https://eu.forums.blizzard.com/en/wow/u/Kaivax/activity.rss',
   'https://eu.forums.blizzard.com/en/wow/u/Aggrend/activity.rss',
-  'https://www.reddit.com/r/wowforever/new/.rss',
 ];
+export const COVERAGE = 'blizzard-forums-v1';
+export const COVERAGE_NOTE = 'Coverage: Blizzard EU forums only; Reddit monitoring discontinued.';
+export function configureCoverage(state) {
+  if (state.coverage === COVERAGE) return;
+  state.coverage = COVERAGE;
+  // Removing a retired source is a scope change, not recovery of that source.
+  // Preserve history, evidence deduplication and interval reservations.
+  if (state.health?.alertActive) state.health.recoverySuppressed = true;
+}
 const HOUR = 3600000;
 const HEALTH_WINDOW = 6 * HOUR;
 
@@ -40,21 +48,22 @@ export async function notifyHealth(store, stats, failed, details, openingSent = 
     // Opening evidence replaces a recovery message for an existing incident.
     if (health.alertActive) health.openingNotified = true;
   } else if (health.alertActive && !failed && !stats.unhealthy) {
-    if (!health.openingNotified && health.alertDelivered !== false) {
+    if (!health.openingNotified && !health.recoverySuppressed && health.alertDelivered !== false) {
       // A failed recovery delivery must keep the incident active, otherwise
       // the next run could send another failure before a recovery was accepted.
       await send('WoW monitor back to normal',
-        'All configured RSS sources are accessible again and the six-hour failure rate is at most 50%. This is NOT a reopening alert.');
+        `All configured Blizzard feeds are accessible again and the six-hour failure rate is at most 50%. ${COVERAGE_NOTE} This is NOT a reopening alert.`);
     }
     health.alertActive = false;
     delete health.alertDelivered;
     delete health.openingNotified;
+    delete health.recoverySuppressed;
   } else if (!health.alertActive && stats.unhealthy) {
     const reason = stats.consecutive >= 12
       ? `${stats.consecutive} consecutive checks failed (about one hour at the five-minute schedule).`
       : `${stats.failures}/${stats.total} checks failed in the last six hours (${(stats.ratio * 100).toFixed(1)}%).`;
     notification = ['MONITOR CHECK FAILED - WoW',
-      `${reason} Monitoring coverage is incomplete. ${details} Inspect GitHub Actions. This is NOT a reopening alert.`];
+      `${reason} Monitoring coverage is incomplete. ${details} ${COVERAGE_NOTE} Inspect GitHub Actions. This is NOT a reopening alert.`];
     health.alertActive = true;
     health.alertDelivered = false;
   }
@@ -177,6 +186,7 @@ export async function stateStore() {
   }};
 }
 export async function main() {
+  console.log(COVERAGE_NOTE);
   if (process.argv.includes('--probe')) {
     for (const source of FEEDS) {
       try {
@@ -193,6 +203,7 @@ export async function main() {
   }
   const store = await stateStore();
   const state = store.state;
+  configureCoverage(state);
   const now = Date.now();
   const runId = process.env.GITHUB_RUN_ID || String(now);
   if (process.argv.includes('--record-failure')) {
@@ -219,7 +230,8 @@ export async function main() {
     ...(result.status==='fulfilled' ? {items:result.value.length} : {error:result.reason.message})})));
   const items=results.flatMap(r=>r.status==='fulfilled'?r.value:[]);
   const errors=results.flatMap((r,i)=>r.status==='rejected'?[`${FEEDS[i]}: ${r.reason.message}`]:[]);
-  state.recent = [...(state.recent||[]), ...items.filter(i=>candidate(i,now))].filter(i=>now-i.date<=HOUR);
+  state.recent = [...(state.recent||[]), ...items.filter(i=>candidate(i,now))]
+    .filter(i=>now-i.date<=HOUR && i.url.startsWith('https://eu.forums.blizzard.com/'));
   const evidence=newEvidence(state.recent,state,now);
   const staff=items.filter(i=>staffStatement(i,now) && !state.alerted?.[i.id]);
   if(staff.length) {
@@ -247,7 +259,7 @@ export async function main() {
   const stats = recordHealth(state, errors.length > 0, now, runId);
   completed = true;
   await notifyHealth(store, stats, errors.length > 0, errors.join('; '), openingSent);
-  console.log(JSON.stringify({checkedAt:new Date(now).toISOString(),items:items.length,sourceFailures:errors.length,evidence:evidence.length,health:stats,alertActive:state.health.alertActive}));
+  console.log(JSON.stringify({checkedAt:new Date(now).toISOString(),coverage:COVERAGE,redditMonitored:false,items:items.length,sourceFailures:errors.length,evidence:evidence.length,health:stats,alertActive:state.health.alertActive}));
   if (errors.length) process.exitCode=1;
   } catch (e) {
     // Do not recursively report notification/state-save failures as new alerts.

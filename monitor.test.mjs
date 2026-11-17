@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main,FEEDS,recordHealth,notifyHealth} from './monitor.mjs';
+import {candidate,newEvidence,parseFeed,staffStatement,stateStore,main,FEEDS,recordHealth,notifyHealth,configureCoverage,COVERAGE} from './monitor.mjs';
 // No fixture may reach a real feed or notification topic, including in CI.
 globalThis.fetch = async () => {throw Error('Network disabled in tests');};
 const now=Date.now();
@@ -116,6 +116,27 @@ function healthFixture(state = {}) {
   };
   return {state, messages, check};
 }
+
+test('dropping Reddit preserves state and silently closes the old incident on recovery', async () => {
+  const state = {lastCheck: now, alerted: {a: now}, recent: [],
+    health: {startedAt: now, history: [], alertActive: true, alertDelivered: true}};
+  const history = state.health.history;
+  configureCoverage(state);
+  assert.equal(state.coverage, COVERAGE);
+  assert.equal(state.lastCheck, now);
+  assert.deepEqual(state.alerted, {a: now});
+  assert.equal(state.health.history, history);
+  const {check, messages} = healthFixture(state);
+  await check(false, now + STEP);
+  assert.deepEqual(messages, []);
+  assert.equal(state.health.alertActive, false);
+  configureCoverage(state); // Idempotent: later genuine incidents still notify.
+  for (let i=2; i<14; i++) await check(true, now+i*STEP);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].body, /Blizzard EU forums only/);
+  assert.equal(FEEDS.length, 4);
+  assert.ok(FEEDS.every(url => new URL(url).hostname === 'eu.forums.blizzard.com'));
+});
 
 test('twelve consecutive failed runs alert once; changes and continued failures stay quiet', async () => {
   const {check, messages} = healthFixture();

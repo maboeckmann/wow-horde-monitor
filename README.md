@@ -4,9 +4,9 @@ Independent RSS checker executed by GitHub Actions and triggered every five minu
 
 ## What it can establish
 
-This is a conservative text-matching detector, not ChatGPT research and not a Blizzard status API. It checks five feeds: EU Forever general discussion, the faction-balance announcement thread, Kaivax and Aggrend activity, and r/wowforever new posts. Two distinct authors must explicitly report FIRST Horde creation on regular EU PvP within the last hour; these alerts say **UNCONFIRMED**. A matching recent reopening statement by Kaivax or Aggrend on the EU forum produces a separate source-linked alert to read and verify. All alerts require manual verification. Ambiguous or differently worded reports may be missed. Source feeds can be incomplete or block GitHub runners.
+This is a conservative text-matching detector, not ChatGPT research and not a Blizzard status API. It checks four Blizzard EU forum feeds: Forever general discussion, the faction-balance announcement thread, and Kaivax and Aggrend activity. Reddit posts and comments are no longer monitored. Two distinct authors must explicitly report FIRST Horde creation on regular EU PvP within the last hour; these alerts say **UNCONFIRMED**. A matching recent reopening statement by Kaivax or Aggrend on the EU forum produces a separate source-linked alert to read and verify. All alerts require manual verification. Ambiguous or differently worded reports may be missed. Source feeds can be incomplete or block GitHub runners.
 
-The subreddit-wide Reddit comments RSS feed returned HTTP 429 during the initial cloud test and is excluded. Reddit comment-only reports are not covered. Each run logs the status and item count of every configured feed. A failed run means at least one configured feed failed, or the workflow could not complete.
+Reddit ended RSS support on November 13, 2026 ([official announcement](https://support.reddithelp.com/hc/en-us/articles/55472297340308-Changelog-November-10-2026)). Direct HTML/JSON diagnostics also encountered verification challenges and access restrictions. No reliable supported replacement was verified, so Reddit was removed rather than silently treated as healthy. Forum-only coverage may miss brief openings reported only on Reddit. Each run logs the status and item count of every configured feed. A failed run means at least one configured feed failed, or the workflow could not complete.
 
 ## Notification policy
 
@@ -35,3 +35,8 @@ The state branch records a last-check timestamp before any feed requests. The ex
 Requires Node.js 24 or newer. `node --test monitor.test.mjs` tests the detector and incident policy with networking disabled. Running `node monitor.mjs` requires `NTFY_TOPIC` in the environment and writes `.monitor-state.json`. The legacy `--test-push` command still sends a notification: do not run it against the shared topic.
 
 Your local ChatGPT monitor remains separate and unchanged. View cloud runs and source status in the repository's Actions tab. The private ntfy topic belongs only in repository secrets, never in committed files.
+
+## November 17 coverage migration
+
+The first upgraded run records blizzard-forums-v1 in persistent state. Existing failure history, check reservations and alerted evidence IDs are preserved. An existing incident is marked to close silently on recovery, avoiding a misleading recovery push merely because Reddit was removed. Future genuine Blizzard feed failures retain the same alert thresholds. Every run logs the reduced coverage. No test notifications are needed for verification.
+
